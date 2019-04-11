@@ -5,16 +5,27 @@ module Fedex
     class Shipment < Base
       attr_reader :response_details
 
-      def initialize(credentials, options={})
+      def initialize(credentials, options = {})
         super
         requires!(options, :service_type)
         # Label specification is required even if we're not using it.
         @label_specification = {
-          :label_format_type => 'COMMON2D',
-          :image_type => 'PDF',
-          :label_stock_type => 'PAPER_LETTER'
+            :label_format_type => 'COMMON2D',
+            :image_type => 'PDF',
+            :label_stock_type => 'PAPER_LETTER'
+        }
+        @shipping_document_specification = {
+            :shipping_document_types => "COMMERCIAL_INVOICE",
+            :commercial_invoice_detail => {
+                :format => {
+                    :image_type => "PDF",
+                    :stock_type => "PAPER_LETTER",
+                    :provide_instructions => 1
+                }
+            }
         }
         @label_specification.merge! options[:label_specification] if options[:label_specification]
+        @shipping_document_specification.merge! options[:shipping_document_specification] if options[:shipping_document_specification]
         @customer_specified_detail = options[:customer_specified_detail] if options[:customer_specified_detail]
       end
 
@@ -37,7 +48,7 @@ module Fedex
 
       # Add information for shipments
       def add_requested_shipment(xml)
-        xml.RequestedShipment{
+        xml.RequestedShipment {
           xml.ShipTimestamp @shipping_options[:ship_timestamp] ||= Time.now.utc.iso8601(2)
           xml.DropoffType @shipping_options[:drop_off_type] ||= "REGULAR_PICKUP"
           xml.ServiceType service_type
@@ -57,7 +68,7 @@ module Fedex
 
       def add_total_weight(xml)
         if @mps.has_key? :total_weight
-          xml.TotalWeight{
+          xml.TotalWeight {
             xml.Units @mps[:total_weight][:units]
             xml.Value @mps[:total_weight][:value]
           }
@@ -67,15 +78,29 @@ module Fedex
       # Hook that can be used to add custom parts.
       def add_custom_components(xml)
         add_label_specification xml
+        add_shipping_document_specification xml
       end
 
-     # Add the label specification
+      def add_shipping_document_specification(xml)
+        xml.ShippingDocumentSpecification {
+          xml.ShippingDocumentTypes @shipping_document_specification[:shipping_document_types]
+          xml.CommercialInvoiceDetail {
+            xml.Format {
+              xml.ImageType @shipping_document_specification[:commercial_invoice_detail][:format][:image_type]
+              xml.StockType @shipping_document_specification[:commercial_invoice_detail][:format][:stock_type]
+              xml.ProvideInstructions @shipping_document_specification[:commercial_invoice_detail][:format][:provide_instructions]
+            }
+          }
+        }
+      end
+
+      # Add the label specification
       def add_label_specification(xml)
         xml.LabelSpecification {
           xml.LabelFormatType @label_specification[:label_format_type]
           xml.ImageType @label_specification[:image_type]
           xml.LabelStockType @label_specification[:label_stock_type]
-          xml.CustomerSpecifiedDetail{ hash_to_xml(xml, @customer_specified_detail) } if @customer_specified_detail
+          xml.CustomerSpecifiedDetail {hash_to_xml(xml, @customer_specified_detail)} if @customer_specified_detail
 
           if @label_specification[:printed_label_origin] && @label_specification[:printed_label_origin][:address]
             xml.PrintedLabelOrigin {
@@ -128,10 +153,10 @@ module Fedex
       # Callback used after a failed shipment response.
       def failure_response(api_response, response)
         error_message = if response[:process_shipment_reply]
-          [response[:process_shipment_reply][:notifications]].flatten.first[:message]
-        else
-          "#{api_response["Fault"]["detail"]["fault"]["reason"]}\n--#{api_response["Fault"]["detail"]["fault"]["details"]["ValidationFailureDetail"]["message"].join("\n--")}"
-        end rescue $1
+                          [response[:process_shipment_reply][:notifications]].flatten.first[:message]
+                        else
+                          "#{api_response["Fault"]["detail"]["fault"]["reason"]}\n--#{api_response["Fault"]["detail"]["fault"]["details"]["ValidationFailureDetail"]["message"].join("\n--")}"
+                        end rescue $1
         raise RateError, error_message
       end
 
@@ -143,7 +168,7 @@ module Fedex
       # Build xml Fedex Web Service request
       def build_xml
         builder = Nokogiri::XML::Builder.new do |xml|
-          xml.ProcessShipmentRequest(:xmlns => "http://fedex.com/ws/ship/v#{service[:version]}"){
+          xml.ProcessShipmentRequest(:xmlns => "http://fedex.com/ws/ship/v#{service[:version]}") {
             add_web_authentication_detail(xml)
             add_client_detail(xml)
             add_version(xml)
@@ -154,13 +179,13 @@ module Fedex
       end
 
       def service
-        { :id => 'ship', :version => Fedex::API_VERSION }
+        {:id => 'ship', :version => Fedex::API_VERSION}
       end
 
       # Successful request
       def success?(response)
         response[:process_shipment_reply] &&
-          %w{SUCCESS WARNING NOTE}.include?(response[:process_shipment_reply][:highest_severity])
+            %w{SUCCESS WARNING NOTE}.include?(response[:process_shipment_reply][:highest_severity])
       end
 
     end
